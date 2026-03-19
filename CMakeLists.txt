@@ -8,7 +8,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # source file
 set(SRC src/Optimised_cpp.cpp)
 
-set(FPGA_FLAGS "-fsycl -fintelfpga -Xstarget=Agilex7 -Xsoptimize=latency -Xsclock=1ns")
+set(FPGA_FLAGS 
+    "-fsycl" 
+    "-fintelfpga" 
+    "-Xstarget=Agilex7" 
+    "-Xsoptimize=latency" 
+    "-Xsclock=1ns"
+)
 
 # half compilation
 # add_executable(keccak_report ${SRC})
