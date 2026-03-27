@@ -5,6 +5,9 @@
 
 using namespace sycl;
 
+// SYCL implementation of Keccak-f[1600] for FPGA using shared memory.
+// Allocates state in shared memory and processes it in a single kernel.
+// Simpler sequential processing, more similar to CPU execution.
 
 const uint64_t RC[24] = {
     0x0000000000000001, 0x0000000000008082, 0x800000000000808A,

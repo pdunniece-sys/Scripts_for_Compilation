@@ -1,10 +1,14 @@
 #include <iostream>
 #include <cstdint>
+#include <array>
 #include <sycl/sycl.hpp>
 #include <sycl/ext/intel/fpga_extensions.hpp>
 
 using namespace sycl;
 
+// SYCL implementation of Keccak-f[1600] for FPGA using pipes.
+// Half-unrolled architecture: Uses HLS pragmas to instantiate exactly 12 rounds in hardware.
+// Processes blocks through SYCL pipes for high-throughput streaming.
 
 const uint64_t RC[24] = {
     0x0000000000000001, 0x0000000000008082, 0x800000000000808A,
@@ -21,13 +25,20 @@ inline uint64_t rotl64(uint64_t a, int n) {
     return (n == 0) ? a : ((a << n) | (a >> (64 - n)));
 }
 
-// State is 1D array of 25 elements
-void keccak_f1600_optimized(uint64_t state[25]) {
+
+using PipeIn = ext::intel::pipe<class KeccakInPipe, std::array<uint64_t, 25>>;
+using PipeOut = ext::intel::pipe<class KeccakOutPipe, std::array<uint64_t, 25>>;
+
+// Half-unrolled Keccak-f[1600]: 12 rounds in hardware, executes loop 2 times
+void keccak_f1600_half_unrolled(std::array<uint64_t, 25>& state) {
     uint64_t C[5], D[5];
     uint64_t t0, t1, t2, t3, t4;
 
-    #pragma unroll 1
+    
+   
+    #pragma unroll 12
     for (int i = 0; i < 24; ++i) {
+        
         // THETA 
         C[0] = state[0] ^ state[5] ^ state[10] ^ state[15] ^ state[20];
         C[1] = state[1] ^ state[6] ^ state[11] ^ state[16] ^ state[21];
@@ -90,13 +101,20 @@ void keccak_f1600_optimized(uint64_t state[25]) {
             state[y + 4] = t4 ^ ((~t0) & t1);
         }
 
-        //  IOTA 
+        // IOTA 
         state[0] ^= RC[i];
+
+        // Force clock registers between the unrolled hardware chunks lower critical path 
+        #pragma unroll
+        for (int j = 0; j < 25; ++j) {
+            state[j] = sycl::ext::intel::fpga_reg(state[j]);
+        }
     }
 }
 
 int main() {
     try {
+        
         #if defined(FPGA_EMULATOR)
             queue q{ext::intel::fpga_emulator_selector_v};
         #else
@@ -107,28 +125,41 @@ int main() {
 
         int num_blocks = 50000000;
 
-        
-        uint64_t* state = malloc_shared<uint64_t>(25, q);
-        for(int i = 0; i < 25; i++) {
-            state[i] = 0;
-        }
-
-        std::cout << "Synthesising Keccak-f[1600] hardware pipeline...\n";
+        std::cout << "Synthesising Half-Unrolled Keccak-f[1600] hardware pipeline with Pipes...\n";
 
         
         q.submit([&](handler& h) {
-            
-            h.single_task<class KeccakPipeline>([=]() [[intel::kernel_args_restrict]] {
+            h.single_task<class DataFeeder>([=]() {
                 for (int i = 0; i < num_blocks; ++i) {
-                    keccak_f1600_optimized(state);
+                    std::array<uint64_t, 25> input_block = {0}; 
+                    PipeIn::write(input_block);
                 }
             });
-        }).wait();
+        });
 
-        std::cout << "Kernel execution simulated!\n";
         
-        // Clean up 
-        free(state, q);
+        q.submit([&](handler& h) {
+            h.single_task<class KeccakPipeline>([=]() [[intel::kernel_args_restrict]] {
+                for (int i = 0; i < num_blocks; ++i) {
+                    std::array<uint64_t, 25> local_state = PipeIn::read();
+                    
+                    keccak_f1600_half_unrolled(local_state);
+                    
+                    PipeOut::write(local_state);
+                }
+            });
+        });
+
+        
+        q.submit([&](handler& h) {
+            h.single_task<class DataConsumer>([=]() {
+                for (int i = 0; i < num_blocks; ++i) {
+                    std::array<uint64_t, 25> output_block = PipeOut::read();
+                }
+            });
+        }).wait(); 
+
+        std::cout << "Kernel execution complete!\n";
 
     } catch (exception const& e) {
         std::cout << "SYCL exception caught: " << e.what() << '\n';
