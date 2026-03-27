@@ -13,7 +13,7 @@ set(FPGA_FLAGS
     "-fintelfpga" 
     "-Xstarget=Agilex7" 
     "-Xsoptimize=latency" 
-    "-Xsclock=1ns"
+    "-Xsclock=4ns"
 )
 
 # half compilation
